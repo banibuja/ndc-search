@@ -13,22 +13,26 @@ class DrugSearch extends Component
     use WithPagination;
 
     public $inputCodes;
-    public $results = null;
-    public $loading = false;
+    public $results = null; // Mbajne rezultatet e kerkimit
+    public $loading = false; // Tregon nese kerkimi eshte ne progres
 
     public function search()
     {
-        $this->resetPage();
+        $this->resetPage(); // Reseton faqen kur behet kerkimi i ri
         $this->loading = true;
 
+        // Merr kodet e futura dhe i ndan me presje
         $codes = array_filter(array_map('trim', explode(',', $this->inputCodes)));
+
+        // Kerkon ne databaze per kodet ekzistuese
         $localResults = Drug::whereIn('ndc_code', $codes)->get()->keyBy('ndc_code');
 
         $foundCodes = $localResults->keys()->toArray();
-        $missingCodes = array_diff($codes, $foundCodes);
+        $missingCodes = array_diff($codes, $foundCodes); // Kodet qe mungojne ne databaze
 
         $apiResults = collect();
 
+        // Kerkon ne API vetem per kodet qe nuk u gjeten ne databaze
         if (!empty($missingCodes)) {
             $normalizedMap = collect($missingCodes)->mapWithKeys(function ($code) {
                 $parts = explode('-', $code);
@@ -39,10 +43,12 @@ class DrugSearch extends Component
             $query = $normalizedMap->values()->map(fn($c) => 'product_ndc:"' . $c . '"')->implode('+OR+');
             $response = Http::get("https://api.fda.gov/drug/ndc.json?search={$query}");
 
+            // Nese API kthen pergjigje valide, ruaj ne databaze dhe rendit rezultatet
             if ($response->ok() && isset($response['results'])) {
                 foreach ($response['results'] as $item) {
                     $originalCode = array_search($item['product_ndc'], $normalizedMap->all()) ?: $item['product_ndc'];
 
+                    // Ruaj ose perditeso ne databaze
                     $drug = Drug::updateOrCreate(
                         ['ndc_code' => $originalCode],
                         [
@@ -53,6 +59,7 @@ class DrugSearch extends Component
                         ]
                     );
 
+                    // Shto ne rezultatet nga API me burim te caktuar
                     $apiResults->push(array_merge($drug->toArray(), [
                         'ndc_code' => $originalCode,
                         'source' => 'OpenFDA',
@@ -61,6 +68,7 @@ class DrugSearch extends Component
             }
         }
 
+        // Bashko rezultatet nga databaza dhe API
         $allFound = collect();
 
         foreach ($localResults as $drug) {
@@ -71,6 +79,7 @@ class DrugSearch extends Component
             $allFound[$item['ndc_code']] = $item;
         }
 
+        // Per ato qe nuk u gjeten fare, vendos si Not Found
         foreach ($codes as $originalCode) {
             if (!isset($allFound[$originalCode])) {
                 $allFound[$originalCode] = [
@@ -88,25 +97,28 @@ class DrugSearch extends Component
         $this->loading = false;
     }
 
-   public function delete($ndc)
-{
-    $parts = explode('-', $ndc);
-    $normalized = count($parts) >= 2 ? "{$parts[0]}-{$parts[1]}" : $ndc;
+    public function delete($ndc)
+    {
+        // Normalizon kodin dhe fshin nga databaza
+        $parts = explode('-', $ndc);
+        $normalized = count($parts) >= 2 ? "{$parts[0]}-{$parts[1]}" : $ndc;
 
-    Drug::where('ndc_code', $ndc)
-        ->orWhere('ndc_code', $normalized)
-        ->delete();
+        Drug::where('ndc_code', $ndc)
+            ->orWhere('ndc_code', $normalized)
+            ->delete();
 
-    if ($this->results !== null) {
-        $this->search();
-    } else {
-        $this->resetPage();
+        // Nese jemi ne rezultatet e kerkimit, rifresko listen
+        if ($this->results !== null) {
+            $this->search();
+        } else {
+            // Perndryshe rifresko faqen per paginim
+            $this->resetPage();
+        }
     }
-}
-
 
     public function exportCsv(): StreamedResponse
     {
+        // Krijon eksportin ne CSV per rezultatet aktuale
         $filename = 'search_results.csv';
         $results = $this->results;
 
@@ -136,6 +148,7 @@ class DrugSearch extends Component
 
     public function render()
     {
+        // Renderon pamjen sipas nese kemi bere kerkese apo jo
         return view('livewire.drug-search', [
             'paginatedDrugs' => $this->results === null
                 ? Drug::latest()->paginate(5)
